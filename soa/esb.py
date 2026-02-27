@@ -1,76 +1,84 @@
-# esb.py
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import requests
-import json
 
 app = Flask(__name__)
+CORS(app)
 
-# Simulated service registry
-services = {
-    'books': 'http://books:5001/books',
-    'loans': 'http://loans:5002/loans',
-    'notifications': 'http://notifications:5003/notifications'
+# Mapa de servicios
+SERVICE_MAP = {
+    "BooksService": "http://books:5000",
+    "UsersService": "http://users:5000",
+    "LoansService": "http://loans:5000",
+    "NotificationsService": "http://notifications:5000"
 }
 
-# Message transformation and routing
-@app.route('/services/<service>/<path:subpath>', methods=['GET', 'POST', 'PUT'])
-def route_request(service, subpath):
-    if service not in services:
-        return jsonify({"error": "Service not found"}), 404
-    
-    # Message transformation
-    headers = {'Content-Type': 'application/json'}
-    target_url = f"{services[service]}/{subpath}"
-    
-    try:
-        if request.method == 'GET':
-            response = requests.get(target_url)
-        elif request.method == 'POST':
-            # Transform message if needed
-            data = request.json
-            response = requests.post(target_url, json=data, headers=headers)
-        elif request.method == 'PUT':
-            data = request.json
-            response = requests.put(target_url, json=data, headers=headers)
-            
-        return response.json(), response.status_code
-    except requests.exceptions.RequestException:
-        return jsonify({"error": "Service unavailable"}), 503
+# Mapa de endpoints internos
+ROUTING_TABLE = {
+    # Books
+    "available_books": {"path": "books", "method": "GET"},
+    "borrowed_books": {"path": "books", "method": "GET"},
 
-# Service composition example: Borrow book process
-@app.route('/processes/borrow', methods=['POST'])
-def borrow_process():
-    data = request.json
-    book_id = data.get('book_id')
-    user_id = data.get('user_id')
-    
+    # Users
+    "registered_users": {"path": "users", "method": "GET"},
+
+    # Loans
+    "active_loans": {"path": "loans", "method": "GET"},
+    "borrow_book": {"path": "loans", "method": "POST"},
+    "return_book": {"path": "loans", "method": "PUT"}
+}
+
+@app.route('/message', methods=['POST'])
+def handle_message():
+    message = request.json
+
+    header = message.get("header", {})
+    body = message.get("body", {})
+
+    service = header.get("service")
+    operation = header.get("operation")
+
+    if service not in SERVICE_MAP:
+        return jsonify({"error": "Unknown service"}), 400
+
+    base_url = SERVICE_MAP[service]
+
     try:
-        # Check book availability
-        book_response = requests.get(f"{services['books']}/{book_id}")
-        if not book_response.ok:
-            return jsonify({"error": "Book not found"}), 404
-            
-        book = book_response.json()
-        if book.get('borrowed'):
-            return jsonify({"error": "Book already borrowed"}), 400
-            
-        # Create loan
-        loan_data = {"book_id": book_id, "user_id": user_id}
-        loan_response = requests.post(services['loans'], json=loan_data)
-        if not loan_response.ok:
-            return jsonify({"error": "Failed to create loan"}), 500
-            
-        # Send notification
-        notif_data = {
-            "user_id": user_id,
-            "message": f"Book '{book.get('title')}' has been borrowed successfully"
-        }
-        requests.post(services['notifications'], json=notif_data)
-        
-        return loan_response.json(), 200
-        
-    except requests.exceptions.RequestException:
-        return jsonify({"error": "Service unavailable"}), 503
+        route = ROUTING_TABLE.get(operation)
+
+        if not route:
+            return jsonify({"error": "Unknown operation"}), 400
+
+        method = route["method"]
+
+        # Construcción base de la URL
+        url = f"{base_url}/{route['path']}"
+
+        # Special case SOLO para return_book
+        if operation == "return_book":
+            loan_id = body.get("loan_id")
+            if not loan_id:
+                return jsonify({"error": "loan_id is required"}), 400
+            url = f"{base_url}/loans/{loan_id}/return"
+
+        if method == "GET":
+            response = requests.get(url)
+
+        elif method == "POST":
+            response = requests.post(url, json=body)
+
+        elif method == "PUT":
+            response = requests.put(url, json=body)
+
+        else:
+            return jsonify({"error": "Unsupported method"}), 400
+
+        print(f"[ESB] Routing {service}.{operation} → {url}")
+        return jsonify(response.json()), response.status_code
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
-    app.run(port=5000,host='0.0.0.0')
+    app.run(host='0.0.0.0', port=5000)
