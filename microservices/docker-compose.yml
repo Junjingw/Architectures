@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+
+  books:
+    image: books-micro
+    container_name: books
+    ports:
+      - "8085:5000"
+
+
+  loans:
+    image: loans-micro
+    container_name: loans
+    depends_on:
+      - books
+    ports:
+      - "8086:5000"
+
+  users:
+    image: users-micro
+    container_name: users
+    ports:
+      - "8087:5000"
+
